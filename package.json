@@ -1,0 +1,5 @@
+{
+  "name": "novenas-2026", "version": "1.0.0", "private": true,
+  "dependencies": {"@neondatabase/serverless": "^1.0.0"},
+  "devDependencies": {"netlify-cli": "^23.0.0"}
+}
