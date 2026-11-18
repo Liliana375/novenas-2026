@@ -12,12 +12,22 @@ function hash(pin) {
   const salt = randomBytes(16).toString('hex');
   return { salt, digest: scryptSync(pin, Buffer.from(salt, 'hex'), 64).toString('hex') };
 }
+// Adds the notes column to existing tables (once per function instance).
+let schemaReady = null;
+function ensureSchema(sql) {
+  if (!schemaReady) {
+    schemaReady = sql`ALTER TABLE novena_reservations ADD COLUMN IF NOT EXISTS notes varchar(500) NOT NULL DEFAULT ''`
+      .catch((e) => { schemaReady = null; throw e; });
+  }
+  return schemaReady;
+}
 exports.handler = async (event) => {
   if (!process.env.DATABASE_URL) return reply(500, { error: 'Falta configurar DATABASE_URL en Netlify.' });
   const sql = neon(process.env.DATABASE_URL);
   try {
+    await ensureSchema(sql);
     if (event.httpMethod === 'GET') {
-      const rows = await sql`SELECT day_number, host_name, arrival_time, address FROM novena_reservations ORDER BY day_number`;
+      const rows = await sql`SELECT day_number, host_name, arrival_time, address, notes FROM novena_reservations ORDER BY day_number`;
       return reply(200, { reservations: rows });
     }
     if (event.httpMethod !== 'POST') return reply(405, { error: 'Método no permitido.' });
@@ -29,10 +39,10 @@ exports.handler = async (event) => {
     if (!Number.isInteger(day) || day < 16 || day > 24) return reply(400, { error: 'Fecha inválida.' });
     if (!/^[0-9]{4,8}$/.test(pin)) return reply(400, { error: 'Código de 4 a 8 números requerido.' });
     if (action === 'create') {
-      const name = clean(body.name, 160), time = clean(body.time, 5), address = clean(body.address, 250);
+      const name = clean(body.name, 160), time = clean(body.time, 5), address = clean(body.address, 250), notes = clean(body.notes, 500);
       if (!name || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !address) return reply(400, { error: 'Completa nombre, hora y dirección.' });
       const { salt, digest } = hash(pin);
-      const rows = await sql`INSERT INTO novena_reservations (day_number, host_name, arrival_time, address, pin_salt, pin_hash) VALUES (${day}, ${name}, ${time}, ${address}, ${salt}, ${digest}) ON CONFLICT DO NOTHING RETURNING day_number`;
+      const rows = await sql`INSERT INTO novena_reservations (day_number, host_name, arrival_time, address, notes, pin_salt, pin_hash) VALUES (${day}, ${name}, ${time}, ${address}, ${notes}, ${salt}, ${digest}) ON CONFLICT DO NOTHING RETURNING day_number`;
       if (!rows.length) return reply(409, { error: 'Esta fecha ya fue reservada. Actualiza la página.' });
       return reply(200, { ok: true });
     }
@@ -45,9 +55,9 @@ exports.handler = async (event) => {
       await sql`DELETE FROM novena_reservations WHERE day_number = ${day} AND pin_hash = ${rows[0].pin_hash}`;
       return reply(200, { ok: true });
     }
-    const name = clean(body.name, 160), time = clean(body.time, 5), address = clean(body.address, 250);
+    const name = clean(body.name, 160), time = clean(body.time, 5), address = clean(body.address, 250), notes = clean(body.notes, 500);
     if (!name || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !address) return reply(400, { error: 'Completa nombre, hora y dirección.' });
-    await sql`UPDATE novena_reservations SET host_name=${name}, arrival_time=${time}, address=${address}, updated_at=now() WHERE day_number=${day} AND pin_hash=${rows[0].pin_hash}`;
+    await sql`UPDATE novena_reservations SET host_name=${name}, arrival_time=${time}, address=${address}, notes=${notes}, updated_at=now() WHERE day_number=${day} AND pin_hash=${rows[0].pin_hash}`;
     return reply(200, { ok: true });
   } catch (e) {
     console.error('Reservation error:', e);
